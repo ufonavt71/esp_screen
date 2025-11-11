@@ -1,5 +1,4 @@
 // Добавить таймер реконнекта. Если реконнекта нет дольше 5 мин, то перезапустить устройство
-// Опрос датчика температуры не даёт ветке 0.1 с работать с нужной частотой. Может попробовать через прерывание от таймера опрашивать?
 
 #include <AsyncUDP.h>
 #include <WiFi.h>
@@ -7,8 +6,12 @@
 #include "esp_screen_exch.h"
 #include "CRC_Software_calculation.h"
 
+hw_timer_t *main_timer = NULL;
+
 const int led_connect_rpi_pin = 15;          // Светодиод состояния связи с RPI
-const int button1_pin = 21;                  // Кнопка 1
+const int button1_pin = 21;                  // Кнопка 1   (Схема в приложении к программе в /info)
+
+int button1_prev = 0;                        // Состояние кнопки с предыдущего такта
 
 //const char *ssid_router = "T&J";
 //const char *password_router = "58635863";
@@ -71,10 +74,10 @@ void parsePacket(AsyncUDPPacket packet)
     // Все проверки пройдены, можно скопировать входящий буфер
 		memcpy(&rpi_esp, buf, static_cast<uint64_t>(size));
 
-    Serial.println(String("cnt=") + rpi_esp.cnt);
-    Serial.println(String("t=") + rpi_esp.t1/100.0);
-    Serial.print("crc=0x"); 
-    Serial.println(rpi_esp.crc, HEX);
+    //Serial.println(String("cnt=") + rpi_esp.cnt);
+    //Serial.println(String("t=") + rpi_esp.t1/100.0);
+    //Serial.print("crc=0x"); 
+    //Serial.println(rpi_esp.crc, HEX);
 }
 
 void connect_to_router()
@@ -101,6 +104,21 @@ void connect_to_router()
   Serial.print("\nConnected, IP address: ");
   Serial.println(WiFi.localIP());
   Serial.println(String("WiFi RSSI: ") + WiFi.RSSI() + String(" dB"));
+}
+
+void IRAM_ATTR on_main_timer()  // Прерывание главного таймера, 10 Гц (0.1 сек)
+{
+  //digitalWrite(led_connect_rpi_pin, !digitalRead(led_connect_rpi_pin)); 
+  
+  int button1 = digitalRead(button1_pin);     // Кнопка
+  //Serial.println(String("button1=") + button1);          // Выводим текущее состояние кнопки
+
+  if (button1_prev == 0 && button1 == 1)       // Произошло нажатие
+  {
+    esp_rpi.button1 = 1;
+  }
+
+  button1_prev = button1;
 }
 
 void setup() {
@@ -134,8 +152,22 @@ void setup() {
     esp_restart();
   }
   */
+
+  for (int i=0; i<3; i++)
+  {
+    digitalWrite(led_connect_rpi_pin, HIGH);   
+    delay(100);
+    digitalWrite(led_connect_rpi_pin, LOW);     
+    delay(100);
+  }
+
+  // Инициализация таймера на периодичность 0.1 с
+  main_timer = timerBegin(1000000);                       // Делитель таймера, работает с частотой 1 МГц (1/1000000 c)
+  timerAttachInterrupt(main_timer, &on_main_timer);       // Привязываем таймер к функции-прерыванию
+  timerAlarm(main_timer, 100000, true, 0);                // Срабатывать прерыванию при достижении 100000 отсчетов (0.1сек), true - таймер сбросится для периодичности, 0 - неограниченное кол-во раз
 }
 
+// Асинхронный цикл
 void loop() 
 {
   // put your main code here, to run repeatedly:
@@ -147,24 +179,22 @@ void loop()
   static unsigned long t_work_3_sec = t_current;
   static unsigned long t_rpi_cnt = t_current;
   
-  if (t_current - t_work_01_sec >= 100)   // Период работы главного цикла 0.1 сек
+  if (t_current - t_work_01_sec >= 100)   // Период работы асинхронного цикла 0.1 сек
   {
     t_work_01_sec = t_current;
     
-    int b1 = !digitalRead(button1_pin);     // Кнопка
-    
-    //Serial.println(String("b1=") + b1);   // Выводим состояние кнопки
-    esp_rpi.button1 = b1;
+    // ...
+  
   }
 
-  if (t_current - t_work_1_sec >= 1000)   // Период работы главного цикла 1 сек
+  if (t_current - t_work_1_sec >= 1000)   // Период работы асинхронного цикла 1 сек
   {
     t_work_1_sec = t_current;
 
     static int cnt = 0;
     cnt++;
-    Serial.println(cnt);
 
+    Serial.println(cnt);
     Serial.println(String("t1=") + rpi_esp.t1/100.0);
     
     // Проверка состояния соединения с роутером по WiFi
@@ -186,11 +216,14 @@ void loop()
 
     udp.broadcastTo((uint8_t *)&esp_rpi, sizeof(esp_rpi), rpi_port);
 
+    //Serial.println(String("esp_rpi.button1 = ") + esp_rpi.button1);
     //Serial.println(String("WiFi RSSI: ") + rssi);
+  
+    esp_rpi.button1 = 0; // Обнуляем, чтобы поймать следующее нажатие
   
   } // 1 сек
 
-  if (t_current - t_work_3_sec >= 3000)   // Период работы 3 сек
+  if (t_current - t_work_3_sec >= 3000)   // Период работы асинхронного цикла 3 сек
   {
     t_work_3_sec = t_current;
     
@@ -209,5 +242,8 @@ void loop()
   } // 3 сек
 
 }
+
+
+
 
 
