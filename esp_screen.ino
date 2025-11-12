@@ -1,12 +1,12 @@
-// Добавить таймер реконнекта. Если реконнекта нет дольше 5 мин, то перезапустить устройство
-
 #include <AsyncUDP.h>
 #include <WiFi.h>
 
+#include "esp_timer.h"
 #include "esp_screen_exch.h"
 #include "CRC_Software_calculation.h"
 
-hw_timer_t *main_timer = NULL;
+hw_timer_t *hw_timer = NULL;                 // Аппаратный таймер
+esp_timer_handle_t timer = NULL;             // Главный программный таймер
 
 const int led_connect_rpi_pin = 15;          // Светодиод состояния связи с RPI
 const int button1_pin = 21;                  // Кнопка 1   (Схема в приложении к программе в /info)
@@ -82,7 +82,9 @@ void parsePacket(AsyncUDPPacket packet)
 
 void connect_to_router()
 {
-  digitalWrite(led_connect_rpi_pin, LOW);     // Связи с RPI точно нет
+  digitalWrite(led_connect_rpi_pin, LOW);                   // Связи с RPI точно нет
+ 
+  if (esp_timer_is_active(timer)) esp_timer_stop(timer);    // Остановим главный таймер
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid_router, password_router);
@@ -104,28 +106,91 @@ void connect_to_router()
   Serial.print("\nConnected, IP address: ");
   Serial.println(WiFi.localIP());
   Serial.println(String("WiFi RSSI: ") + WiFi.RSSI() + String(" dB"));
+
+  // Соединение установлено, запускаем главный таймер
+  esp_err_t res = esp_timer_start_periodic(timer, 10000);    // 10 000 мкс = 10 мс
+  if (res != ESP_OK) Serial.println(String("ERROR start timer: ") + esp_err_to_name(res));
 }
 
-void IRAM_ATTR on_main_timer()  // Прерывание главного таймера, 10 Гц (0.1 сек)
+// Главный таймер, 100 Гц (10 мс)
+void on_main_timer(void *arg)
 {
-  //digitalWrite(led_connect_rpi_pin, !digitalRead(led_connect_rpi_pin)); 
-  
-  int button1 = digitalRead(button1_pin);     // Кнопка
-  //Serial.println(String("button1=") + button1);          // Выводим текущее состояние кнопки
+  static uint32_t cntTimerTick = 0;
+  cntTimerTick++;
 
-  if (button1_prev == 0 && button1 == 1)       // Произошло нажатие
+  if (cntTimerTick % 10 == 0)           // 0.1 cек
   {
-    esp_rpi.button1 = 1;
+    int button1 = digitalRead(button1_pin);                  // Кнопка
+    //Serial.println(String("button1=") + button1);          // Выводим текущее мгновенное состояние кнопки
+
+    if (button1_prev == 0 && button1 == 1)                   // Произошло нажатие
+    {
+      esp_rpi.button1 = 1;
+    }
+    button1_prev = button1;
   }
 
-  button1_prev = button1;
+  if (cntTimerTick % 100 == 0)           // 1 cек
+  {
+      static int cnt = 0;
+      cnt++;
+
+      Serial.println(cnt);
+      Serial.println(String("t1=") + rpi_esp.t1/100.0); 
+     
+      // Заполнение и отправка исходящего буфера
+      esp_rpi.cnt = cnt;
+   
+      // Алгоритм CRC16_CCIT_ZERO
+	  esp_rpi.crc = CRC16_Calculate_software((uint16_t*) &esp_rpi, sizeof(esp_rpi) / 2 - 1, 0x0000, 0x1021, false, false, 0x0000);
+      //Serial.print("CRC = 0x");
+      //Serial.println(esp_rpi.crc, HEX);
+
+      udp.broadcastTo((uint8_t *)&esp_rpi, sizeof(esp_rpi), rpi_port);
+
+      //Serial.println(String("esp_rpi.button1 = ") + esp_rpi.button1);
+      //Serial.println(String("WiFi RSSI: ") + rssi);
+  
+      esp_rpi.button1 = 0; // Обнуляем кнопку после отправки, чтобы поймать следующее нажатие
+  }
+
+  if (cntTimerTick % 300 == 0)             // 3 сек
+  {
+    // Проверка связи с RPI и включение светодиода
+    // Если хоть раз изменился счётчик rpi_esp.cnt, значит связь есть
+    static uint16_t rpi_cnt = rpi_esp.cnt;
+    if (rpi_esp.cnt != rpi_cnt)
+    {
+      digitalWrite(led_connect_rpi_pin, HIGH);
+      rpi_cnt = rpi_esp.cnt;
+    }
+    else
+    {
+      digitalWrite(led_connect_rpi_pin, LOW);
+    }
+  } // 3 сек
+
+}
+
+void IRAM_ATTR on_hw_timer()  // Прерывание аппаратного таймера, 100 Гц (0.01 сек)
+{
+  static uint32_t cntTimerTick = 0;
+  cntTimerTick++;
+
+  if (cntTimerTick % 100 == 0)           // 1 cек
+  {
+      static int cnt = 0;
+      cnt++;
+      //Serial.println(String("HW TIMER ") + cnt);   
+      //digitalWrite(led_connect_rpi_pin, !digitalRead(led_connect_rpi_pin)); 
+  }
 }
 
 void setup() {
   // put your setup code here, to run once:
 
   memset (&rpi_esp, 0, sizeof(rpi_esp));
-	memset (&esp_rpi, 0, sizeof(esp_rpi));
+  memset (&esp_rpi, 0, sizeof(esp_rpi));
 
   Serial.begin(115200);
   
@@ -133,6 +198,18 @@ void setup() {
   pinMode(button1_pin, INPUT_PULLUP);     // Кнопка 1 
 
   delay(2000);
+
+  // Инициализация таймера на периодичность 0.1 с
+  hw_timer = timerBegin(1000000);                       // Делитель таймера, работает с частотой 1 МГц (1/1000000 c)
+  timerAttachInterrupt(hw_timer, &on_hw_timer);       // Привязываем таймер к функции-прерыванию
+  timerAlarm(hw_timer, 10000, true, 0);                 // Срабатывать прерыванию при достижении 10000 отсчетов (0.01сек), true - таймер сбросится для периодичности, 0 - неограниченное кол-во раз
+
+  esp_timer_create_args_t timer_config =
+  {
+    .callback = &on_main_timer,
+    .name = "100Hz Timer"
+  };
+  esp_timer_create(&timer_config, &timer);  // А запустим его после установки соединения из функции connect_to_router()
 
   connect_to_router();
 
@@ -161,10 +238,6 @@ void setup() {
     delay(100);
   }
 
-  // Инициализация таймера на периодичность 0.1 с
-  main_timer = timerBegin(1000000);                       // Делитель таймера, работает с частотой 1 МГц (1/1000000 c)
-  timerAttachInterrupt(main_timer, &on_main_timer);       // Привязываем таймер к функции-прерыванию
-  timerAlarm(main_timer, 100000, true, 0);                // Срабатывать прерыванию при достижении 100000 отсчетов (0.1сек), true - таймер сбросится для периодичности, 0 - неограниченное кол-во раз
 }
 
 // Асинхронный цикл
@@ -173,74 +246,21 @@ void loop()
   // put your main code here, to run repeatedly:
 
   unsigned long t_current = millis();
-
-  static unsigned long t_work_01_sec = t_current;
-  static unsigned long t_work_1_sec = t_current;
-  static unsigned long t_work_3_sec = t_current;
-  static unsigned long t_rpi_cnt = t_current;
-  
-  if (t_current - t_work_01_sec >= 100)   // Период работы асинхронного цикла 0.1 сек
-  {
-    t_work_01_sec = t_current;
-    
-    // ...
-  
-  }
-
+  static unsigned long t_work_1_sec = t_current;  
   if (t_current - t_work_1_sec >= 1000)   // Период работы асинхронного цикла 1 сек
   {
     t_work_1_sec = t_current;
-
-    static int cnt = 0;
-    cnt++;
-
-    Serial.println(cnt);
-    Serial.println(String("t1=") + rpi_esp.t1/100.0);
-    
-    // Проверка состояния соединения с роутером по WiFi
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      connect_to_router();
-    }
-
-    long rssi = WiFi.RSSI();
-
-    // Заполнение и отправка исходящего буфера
-    esp_rpi.cnt = cnt;
-    esp_rpi.rssi = static_cast<int16_t>(rssi);
-    
-    // Алгоритм CRC16_CCIT_ZERO
-	  esp_rpi.crc = CRC16_Calculate_software((uint16_t*) &esp_rpi, sizeof(esp_rpi) / 2 - 1, 0x0000, 0x1021, false, false, 0x0000);
-    //Serial.print("CRC = 0x");
-    //Serial.println(esp_rpi.crc, HEX);
-
-    udp.broadcastTo((uint8_t *)&esp_rpi, sizeof(esp_rpi), rpi_port);
-
-    //Serial.println(String("esp_rpi.button1 = ") + esp_rpi.button1);
-    //Serial.println(String("WiFi RSSI: ") + rssi);
-  
-    esp_rpi.button1 = 0; // Обнуляем, чтобы поймать следующее нажатие
-  
+    // ....
   } // 1 сек
 
-  if (t_current - t_work_3_sec >= 3000)   // Период работы асинхронного цикла 3 сек
+  // Проверка состояния соединения с роутером по WiFi
+  if (WiFi.status() != WL_CONNECTED)
   {
-    t_work_3_sec = t_current;
-    
-    // Проверка связи с RPI и включение светодиода
-    // Если хоть раз изменился счётчик rpi_esp.cnt, значит связь есть
-    static uint16_t rpi_cnt = rpi_esp.cnt;
-    if (rpi_esp.cnt != rpi_cnt)
-    {
-      digitalWrite(led_connect_rpi_pin, HIGH);
-      rpi_cnt = rpi_esp.cnt;
-    }
-    else
-    {
-      digitalWrite(led_connect_rpi_pin, LOW);
-    }
-  } // 3 сек
+    connect_to_router();
+  }
 
+  long rssi = WiFi.RSSI();
+  esp_rpi.rssi = static_cast<int16_t>(rssi);
 }
 
 
