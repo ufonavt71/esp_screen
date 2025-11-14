@@ -1,6 +1,19 @@
 #include <AsyncUDP.h>
 #include <WiFi.h>
 
+// ***** Monochrome OLEDs based on SSD1306 drivers **********
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+// **********************************************************
+
 #include "esp_timer.h"
 #include "esp_screen_exch.h"
 #include "CRC_Software_calculation.h"
@@ -8,10 +21,12 @@
 hw_timer_t *hw_timer = NULL;                 // Аппаратный таймер
 esp_timer_handle_t timer = NULL;             // Главный программный таймер
 
-const int led_connect_rpi_pin = 15;          // Светодиод состояния связи с RPI
-const int button1_pin = 21;                  // Кнопка 1   (Схема в приложении к программе в /info)
+const int led_connect_rpi_pin = 02;          // Светодиод состояния связи с RPI
+const int button1_pin = 19;                  // Кнопка 1   (Схема в приложении к программе в /info)
 
 int button1_prev = 0;                        // Состояние кнопки с предыдущего такта
+
+bool rpi_connected = false;                  // Признак наличия связи с RPI
 
 //const char *ssid_router = "T&J";
 //const char *password_router = "58635863";
@@ -84,12 +99,21 @@ void connect_to_router()
 {
   digitalWrite(led_connect_rpi_pin, LOW);                   // Связи с RPI точно нет
  
+// ******************* SSD1306 *************************************
+  display.clearDisplay();                   // Clear display buffer
+	display.setTextSize(0);
+  display.setCursor(0,0);
+  // *****************************************************************
+
   if (esp_timer_is_active(timer)) esp_timer_stop(timer);    // Остановим главный таймер
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid_router, password_router);
   Serial.println(String("Connecting to ") + ssid_router + String(" network"));
-
+  
+  display.print(String("Connecting to ") + ssid_router + String(" network"));
+  display.display();
+ 
   while (WiFi.status() != WL_CONNECTED)
   {
     static int cnt = 0;
@@ -101,6 +125,17 @@ void connect_to_router()
     }
     delay(500);
     Serial.print(".");
+    
+    static int cnt_display_SSD1306 = 0;
+    cnt_display_SSD1306++;
+    if (cnt_display_SSD1306 > 140)
+    {
+      display.clearDisplay();                   // Clear display buffer
+      display.setCursor(0,0);
+      cnt_display_SSD1306 = 0;
+    }
+    display.print(".");
+    display.display();
   }
 
   Serial.print("\nConnected, IP address: ");
@@ -112,7 +147,7 @@ void connect_to_router()
   if (res != ESP_OK) Serial.println(String("ERROR start timer: ") + esp_err_to_name(res));
 }
 
-// Главный таймер, 100 Гц (10 мс)
+// Главный таймер, 100 Гц (10 мс)x
 void on_main_timer(void *arg)
 {
   static uint32_t cntTimerTick = 0;
@@ -137,12 +172,12 @@ void on_main_timer(void *arg)
 
       Serial.println(cnt);
       Serial.println(String("t1=") + rpi_esp.t1/100.0); 
-     
+	 
       // Заполнение и отправка исходящего буфера
       esp_rpi.cnt = cnt;
    
       // Алгоритм CRC16_CCIT_ZERO
-	  esp_rpi.crc = CRC16_Calculate_software((uint16_t*) &esp_rpi, sizeof(esp_rpi) / 2 - 1, 0x0000, 0x1021, false, false, 0x0000);
+	    esp_rpi.crc = CRC16_Calculate_software((uint16_t*) &esp_rpi, sizeof(esp_rpi) / 2 - 1, 0x0000, 0x1021, false, false, 0x0000);
       //Serial.print("CRC = 0x");
       //Serial.println(esp_rpi.crc, HEX);
 
@@ -162,11 +197,13 @@ void on_main_timer(void *arg)
     if (rpi_esp.cnt != rpi_cnt)
     {
       digitalWrite(led_connect_rpi_pin, HIGH);
+      rpi_connected = true;
       rpi_cnt = rpi_esp.cnt;
     }
     else
     {
       digitalWrite(led_connect_rpi_pin, LOW);
+      rpi_connected = false;
     }
   } // 3 сек
 
@@ -182,17 +219,32 @@ void IRAM_ATTR on_hw_timer()  // Прерывание аппаратного т�
       static int cnt = 0;
       cnt++;
       //Serial.println(String("HW TIMER ") + cnt);   
-      //digitalWrite(led_connect_rpi_pin, !digitalRead(led_connect_rpi_pin)); 
+      //digitalWrite(led_connect_int_pin, !digitalRead(led_connect_int_pin)); 
   }
 }
 
 void setup() {
   // put your setup code here, to run once:
 
-  memset (&rpi_esp, 0, sizeof(rpi_esp));
-  memset (&esp_rpi, 0, sizeof(esp_rpi));
-
   Serial.begin(115200);
+
+  // ******************* SSD1306 *************************************
+  // Display SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) 
+  {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  display.clearDisplay();                   // Clear display buffer
+	display.setTextColor(SSD1306_WHITE);      // Draw white text
+	display.setTextSize(1);
+  display.setCursor(5,30);
+  display.print("Starting...");
+  display.display();
+  // *****************************************************************
+
+  memset (&rpi_esp, 0, sizeof(rpi_esp));
+  memset (&esp_rpi, 0, sizeof(esp_rpi));  
   
   pinMode(led_connect_rpi_pin, OUTPUT);
   pinMode(button1_pin, INPUT_PULLUP);     // Кнопка 1 
@@ -261,6 +313,39 @@ void loop()
 
   long rssi = WiFi.RSSI();
   esp_rpi.rssi = static_cast<int16_t>(rssi);
+
+
+  // ******************* SSD1306 *************************************
+  display.clearDisplay();                   // Clear display buffer
+	display.setTextColor(SSD1306_WHITE);      // Draw white text
+	
+  if (rpi_connected) display.setTextSize(9);
+  else 
+  {
+    display.setTextSize(0);
+    display.setCursor(0,56);
+    display.print("RPI NOT CONNECTED");
+    display.setTextSize(7);
+  }
+
+  int t = rpi_esp.t1/100.0;
+  int t_abs = abs(t);
+
+  bool oneDigit = false;
+  int  oneDigitOffset = 0;
+  if (t>-10 && t<10) 
+  {
+    oneDigit = true;
+    oneDigitOffset = 30;
+  }
+  if (t<0) display.fillRect(0 + oneDigitOffset, 28, 14, 8, SSD1306_INVERSE);   // Знак "-"
+
+  display.setCursor(20 + oneDigitOffset,0);
+  display.print(t_abs);
+  display.display();
+  
+  // *****************************************************************
+
 }
 
 
