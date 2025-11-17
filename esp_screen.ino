@@ -12,7 +12,14 @@
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-// **********************************************************
+bool SSD1306 = false;
+
+// ***** 4-Digit LED Display TM1637 *********
+#include <TM1637Display.h>
+#define CLK 22
+#define DIO 23
+TM1637Display disp1637(CLK, DIO);
+bool TM1637 = true;
 
 #include "esp_timer.h"
 #include "esp_screen_exch.h"
@@ -99,10 +106,18 @@ void connect_to_router()
 {
   digitalWrite(led_connect_rpi_pin, LOW);                   // Связи с RPI точно нет
  
-// ******************* SSD1306 *************************************
-  display.clearDisplay();                   // Clear display buffer
-	display.setTextSize(0);
-  display.setCursor(0,0);
+  // ******************* SSD1306 *************************************
+  if (SSD1306)
+  {
+    display.clearDisplay();                   // Clear display buffer
+	  display.setTextSize(0);
+    display.setCursor(0,0);
+  }
+  // ******************* TM1637 **************************************
+  if (TM1637)
+  {
+    disp1637.clear();                          // Clear display
+  }
   // *****************************************************************
 
   if (esp_timer_is_active(timer)) esp_timer_stop(timer);    // Остановим главный таймер
@@ -111,9 +126,12 @@ void connect_to_router()
   WiFi.begin(ssid_router, password_router);
   Serial.println(String("Connecting to ") + ssid_router + String(" network"));
   
-  display.print(String("Connecting to ") + ssid_router + String(" network"));
-  display.display();
- 
+  if (SSD1306)
+  {
+    display.print(String("Connecting to ") + ssid_router + String(" network"));
+    display.display(); 
+  }
+
   while (WiFi.status() != WL_CONNECTED)
   {
     static int cnt = 0;
@@ -126,16 +144,28 @@ void connect_to_router()
     delay(500);
     Serial.print(".");
     
-    static int cnt_display_SSD1306 = 0;
-    cnt_display_SSD1306++;
-    if (cnt_display_SSD1306 > 140)
+    if (SSD1306)
     {
-      display.clearDisplay();                   // Clear display buffer
-      display.setCursor(0,0);
-      cnt_display_SSD1306 = 0;
+      static int cnt_display_SSD1306 = 0;
+      cnt_display_SSD1306++;
+      if (cnt_display_SSD1306 > 140)
+      {
+        display.clearDisplay();                   // Clear display buffer
+        display.setCursor(0,0);
+        cnt_display_SSD1306 = 0;
+      }
+      display.print(".");
+      display.display();
     }
-    display.print(".");
-    display.display();
+    if (TM1637)
+    {
+      static int pos = 0;
+      disp1637.clear();
+      disp1637.showNumberDec(0, false, 1, pos);
+      pos++;
+      if (pos > 3) pos = 0;
+    }
+
   }
 
   Serial.print("\nConnected, IP address: ");
@@ -230,17 +260,28 @@ void setup() {
 
   // ******************* SSD1306 *************************************
   // Display SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) 
+  if (SSD1306)
   {
-    Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) 
+    {
+      Serial.println(F("SSD1306 allocation failed"));
+      for(;;); // Don't proceed, loop forever
+    }
+    display.clearDisplay();                   // Clear display buffer
+	  display.setTextColor(SSD1306_WHITE);      // Draw white text
+	  display.setTextSize(1);
+    display.setCursor(5,30);
+    display.print("Starting...");
+    display.display();
   }
-  display.clearDisplay();                   // Clear display buffer
-	display.setTextColor(SSD1306_WHITE);      // Draw white text
-	display.setTextSize(1);
-  display.setCursor(5,30);
-  display.print("Starting...");
-  display.display();
+  // *****************************************************************
+
+// ******************* TM1637 *************************************
+  if (TM1637)
+  {
+    disp1637.clear();
+    disp1637.setBrightness(7);
+  }
   // *****************************************************************
 
   memset (&rpi_esp, 0, sizeof(rpi_esp));
@@ -316,36 +357,47 @@ void loop()
 
 
   // ******************* SSD1306 *************************************
-  display.clearDisplay();                   // Clear display buffer
-	display.setTextColor(SSD1306_WHITE);      // Draw white text
+  if (SSD1306)
+  {
+    display.clearDisplay();                   // Clear display buffer
+	  display.setTextColor(SSD1306_WHITE);      // Draw white text
 	
-  if (rpi_connected) display.setTextSize(9);
-  else 
-  {
-    display.setTextSize(0);
-    display.setCursor(0,56);
-    display.print("RPI NOT CONNECTED");
-    display.setTextSize(7);
+    if (rpi_connected) display.setTextSize(9);
+    else 
+    {
+      display.setTextSize(0);
+      display.setCursor(0,56);
+      display.print("RPI NOT CONNECTED");
+      display.setTextSize(7);
+    }
+
+    int t = rpi_esp.t1/100.0;
+    int t_abs = abs(t);
+
+    bool oneDigit = false;
+    int  oneDigitOffset = 0;
+    if (t>-10 && t<10) 
+    {
+      oneDigit = true;
+      oneDigitOffset = 30;
+    }
+    if (t<0) display.fillRect(0 + oneDigitOffset, 28, 14, 8, SSD1306_INVERSE);   // Знак "-"
+
+    display.setCursor(20 + oneDigitOffset,0);
+    display.print(t_abs);
+    display.display();
   }
-
-  int t = rpi_esp.t1/100.0;
-  int t_abs = abs(t);
-
-  bool oneDigit = false;
-  int  oneDigitOffset = 0;
-  if (t>-10 && t<10) 
-  {
-    oneDigit = true;
-    oneDigitOffset = 30;
-  }
-  if (t<0) display.fillRect(0 + oneDigitOffset, 28, 14, 8, SSD1306_INVERSE);   // Знак "-"
-
-  display.setCursor(20 + oneDigitOffset,0);
-  display.print(t_abs);
-  display.display();
-  
   // *****************************************************************
 
+  // ******************* TM1637 *************************************
+  if (TM1637)
+  {
+     int t = rpi_esp.t1/100.0;
+     disp1637.showNumberDec(t);
+     delay(200);
+  }
+
+  //Serial.println("loop");
 }
 
 
