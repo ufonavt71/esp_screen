@@ -1,9 +1,9 @@
 #include <AsyncUDP.h>
 #include <WiFi.h>
+#include <SPI.h>        // Для экранов с SPI
+#include <Wire.h>       // Для экранов с I2C
 
 // ***** Monochrome OLEDs based on SSD1306 drivers **********
-#include <SPI.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -19,7 +19,12 @@ bool SSD1306 = false;
 #define CLK 22
 #define DIO 23
 TM1637Display disp1637(CLK, DIO);
-bool TM1637 = true;
+bool TM1637 = false;
+
+// **** OLED 2.42 126x64 Ver.4.3 SSD1309
+#include <U8g2lib.h>
+U8G2_SSD1309_128X64_NONAME0_F_4W_HW_SPI u8g2(U8G2_R0, /* cs=*/ 5, /* dc=*/ 16, /* reset=*/ 17);
+bool SSD1309 = true;
 
 #include "esp_timer.h"
 #include "esp_screen_exch.h"
@@ -131,6 +136,21 @@ void connect_to_router()
     display.print(String("Connecting to ") + ssid_router + String(" network"));
     display.display(); 
   }
+  if (SSD1309)
+  {
+    u8g2.clearBuffer();					// clear the internal memory
+    u8g2.setFont(u8g2_font_7x13_t_cyrillic);	// choose a suitable font
+    u8g2.setCursor(3,20);
+    char c[128];
+    sprintf(c, "Соединение с %s ", ssid_router);
+    u8g2.print(c);
+    u8g2.sendBuffer();					// transfer internal memory to the display
+  }  
+
+  int cnt1309_x = 0;
+  int cnt1309_y = 0;
+  int start1309_y = 32;
+  int lines1309_y = 5;
 
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -165,7 +185,28 @@ void connect_to_router()
       pos++;
       if (pos > 3) pos = 0;
     }
+    if (SSD1309)
+    {
+      u8g2.setFont(u8g2_font_10x20_t_cyrillic);	// choose a suitable font      
+      u8g2.setCursor(0+cnt1309_x*5, start1309_y+cnt1309_y*7);
+      u8g2.print(".");
+      u8g2.sendBuffer();
 
+      cnt1309_x++;
+      if (cnt1309_x >= 24) 
+      {
+        cnt1309_x = 0;
+        cnt1309_y++;
+      }
+      if (cnt1309_y >= lines1309_y) 
+      {
+        u8g2.clearBuffer();
+        cnt1309_y = 0; 
+        cnt1309_x = 0;
+        start1309_y = 10;
+        lines1309_y = 8;
+      }
+    }  
   }
 
   Serial.print("\nConnected, IP address: ");
@@ -274,15 +315,26 @@ void setup() {
     display.print("Starting...");
     display.display();
   }
-  // *****************************************************************
 
-// ******************* TM1637 *************************************
+  // ******************* TM1637 **************************************
   if (TM1637)
   {
     disp1637.clear();
     disp1637.setBrightness(7);
   }
-  // *****************************************************************
+  
+  // ******************* SSD1309 *************************************
+  if (SSD1309)
+  {
+    u8g2.begin();
+    u8g2.enableUTF8Print();
+    u8g2.setContrast(255);    
+    u8g2.clearBuffer();					// clear the internal memory
+    u8g2.setFont(u8g2_font_10x20_t_cyrillic);	// choose a suitable font
+    u8g2.setCursor(20,40);
+    u8g2.print("Запуск...");
+    u8g2.sendBuffer();					// transfer internal memory to the display
+  }
 
   memset (&rpi_esp, 0, sizeof(rpi_esp));
   memset (&esp_rpi, 0, sizeof(esp_rpi));  
@@ -387,8 +439,7 @@ void loop()
     display.print(t_abs);
     display.display();
   }
-  // *****************************************************************
-
+  
   // ******************* TM1637 *************************************
   if (TM1637)
   {
@@ -397,7 +448,46 @@ void loop()
      delay(200);
   }
 
-  //Serial.println("loop");
+// ********************* SSD1309 ************************************
+  
+if (SSD1309)
+  {
+    float t1 = rpi_esp.t1/100.0;
+    float t2 = 0;
+    
+    u8g2.clearBuffer();					// clear the internal memory
+    //u8g2.setFontMode(1);
+
+    u8g2.setFont(u8g2_font_9x15_t_cyrillic);	// choose a suitable font
+    u8g2.setCursor(15,15);
+    u8g2.print("За балконом");
+
+    char c[32];
+
+    if (rpi_connected)
+    {
+      u8g2.setFont(u8g2_font_logisoso30_tf);
+      //u8g2.setFont(u8g2_font_helvR24_tn);
+    
+      sprintf(c, "%.1f", t1);
+      if(t1 <= -10.0)                u8g2.setCursor(18,58);
+      if(t1 > -10.0 && t1 < 0.0)     u8g2.setCursor(26,58);
+      if(t1 >= 0.0  && t1 < 10.0)    u8g2.setCursor(38,58);
+      if(t1 >= 10.0)                 u8g2.setCursor(30,58);
+    }
+    else
+    {
+      u8g2.setFont(u8g2_font_8x13_t_cyrillic);
+      u8g2.setCursor(25,45);
+      sprintf(c, "нет данных");
+    }
+
+    u8g2.print(c);  
+    u8g2.sendBuffer();					// transfer internal memory to the display
+    delay(500);  
+  }
+
+  Serial.println("loop");
 }
 
 
