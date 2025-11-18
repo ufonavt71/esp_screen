@@ -328,7 +328,7 @@ void setup() {
   {
     u8g2.begin();
     u8g2.enableUTF8Print();
-    u8g2.setContrast(255);    
+    u8g2.setContrast(0);    
     u8g2.clearBuffer();					// clear the internal memory
     u8g2.setFont(u8g2_font_10x20_t_cyrillic);	// choose a suitable font
     u8g2.setCursor(20,40);
