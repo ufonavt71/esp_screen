@@ -458,31 +458,43 @@ if (SSD1309)
     u8g2.clearBuffer();					// clear the internal memory
     //u8g2.setFontMode(1);
 
-    u8g2.setFont(u8g2_font_9x15_t_cyrillic);	// choose a suitable font
-    u8g2.setCursor(15,15);
-    u8g2.print("За балконом");
-
-    char c[32];
-
     if (rpi_connected)
     {
-      u8g2.setFont(u8g2_font_logisoso30_tf);
-      //u8g2.setFont(u8g2_font_helvR24_tn);
-    
-      sprintf(c, "%.1f", t1);
-      if(t1 <= -10.0)                u8g2.setCursor(18,58);
-      if(t1 > -10.0 && t1 < 0.0)     u8g2.setCursor(26,58);
-      if(t1 >= 0.0  && t1 < 10.0)    u8g2.setCursor(38,58);
-      if(t1 >= 10.0)                 u8g2.setCursor(30,58);
+      if (rpi_esp.t1 == -273*100)   // Признак того, что у RPI нет связи с ESP балкон
+      {
+        u8g2.setFont(u8g2_font_8x13_t_cyrillic);
+        u8g2.setCursor(15,30);
+        u8g2.print("нет данных"); 
+        u8g2.setCursor(15,46);
+        u8g2.print("от ESP балкон"); 
+      }
+      else
+      {
+        u8g2.setFont(u8g2_font_9x15_t_cyrillic);	// choose a suitable font
+        u8g2.setCursor(15,15);
+        u8g2.print("За балконом");
+
+        u8g2.setFont(u8g2_font_logisoso30_tf);
+        //u8g2.setFont(u8g2_font_helvR24_tn);
+        
+        char c[32];
+        sprintf(c, "%.1f", t1);
+        if(t1 <= -10.0)                u8g2.setCursor(18,58);
+        if(t1 > -10.0 && t1 < 0.0)     u8g2.setCursor(26,58);
+        if(t1 >= 0.0  && t1 < 10.0)    u8g2.setCursor(38,58);
+        if(t1 >= 10.0)                 u8g2.setCursor(30,58);
+        u8g2.print(c);
+      } 
     }
     else
     {
       u8g2.setFont(u8g2_font_8x13_t_cyrillic);
-      u8g2.setCursor(25,45);
-      sprintf(c, "нет данных");
+      u8g2.setCursor(25,30);
+      u8g2.print("нет обмена"); 
+      u8g2.setCursor(25,46);
+      u8g2.print("c RPI"); 
     }
 
-    u8g2.print(c);  
     u8g2.sendBuffer();					// transfer internal memory to the display
     delay(500);  
   }
