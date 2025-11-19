@@ -406,7 +406,9 @@ void setup() {
 
 }
 
-// Асинхронный цикл
+// *****************************************************************************
+//    Асинхронный цикл
+// *****************************************************************************
 void loop() 
 {
   // put your main code here, to run repeatedly:
@@ -482,6 +484,11 @@ void loop()
     static double offsetX = 0.05;
     static double offsetY = 0.01;
 
+    static double addGradX = 0.0;
+    static double addGradY = 0.0;
+    static double offsetGradX = 0.04;
+    static double offsetGradY = 0.02;
+
     u8g2.clearBuffer();					// clear the internal memory
     //u8g2.setFontMode(1);
 
@@ -506,10 +513,10 @@ void loop()
         
         char c[32];
         sprintf(c, "%.1f", t1);
-        if(t1 <= -10.0)                u8g2.setCursor(18,58);
-        if(t1 > -10.0 && t1 < 0.0)     u8g2.setCursor(26,58);
-        if(t1 >= 0.0  && t1 < 10.0)    u8g2.setCursor(38,58);
-        if(t1 >= 10.0)                 u8g2.setCursor(30,58);
+        if(t1 <= -10.0)                u8g2.setCursor(18+addGradX, 58+addGradY);
+        if(t1 > -10.0 && t1 < 0.0)     u8g2.setCursor(26+addGradX, 58+addGradY);
+        if(t1 >= 0.0  && t1 < 10.0)    u8g2.setCursor(38+addGradX, 58+addGradY);
+        if(t1 >= 10.0)                 u8g2.setCursor(30+addGradX, 58+addGradY);
         u8g2.print(c);
       } 
     }
@@ -536,6 +543,19 @@ void loop()
     {
       offsetY = offsetY * -1;
       addY = addY + offsetY;
+    }
+
+    addGradX = addGradX + offsetGradX;
+    addGradY = addGradY + offsetGradY;
+    if (addGradX < -5 || addGradX > 5) 
+    { 
+      offsetGradX = offsetGradX * -1;
+      addGradX = addGradX + offsetGradX;
+    }
+    if (addGradY <= -2 || addGradY >= 2) 
+    {
+      offsetGradY = offsetGradY * -1;
+      addGradY = addGradY + offsetGradY;
     }
 
     delay(500);  
