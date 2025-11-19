@@ -34,9 +34,12 @@ hw_timer_t *hw_timer = NULL;                 // Аппаратный тайме�
 esp_timer_handle_t timer = NULL;             // Главный программный таймер
 
 const int led_connect_rpi_pin = 02;          // Светодиод состояния связи с RPI
-const int button1_pin = 19;                  // Кнопка 1   (Схема в приложении к программе в /info)
+const int button1_pin = 19;                  // Кнопка 1   (В режиме INPUT, PULLUP, подтягивающий резистор внутри, поэтому соединение напрямую)
+const int pir_sensor_pin = 34;               // GPIO 34 - Сенсор движения
+const int time_to_show_display = 60;         // Время подсветки диспленя
 
 int button1_prev = 0;                        // Состояние кнопки с предыдущего такта
+int cnt_display_off = time_to_show_display;  // Счетчик для подсветки дисплея
 
 bool rpi_connected = false;                  // Признак наличия связи с RPI
 
@@ -226,14 +229,27 @@ void on_main_timer(void *arg)
 
   if (cntTimerTick % 10 == 0)           // 0.1 cек
   {
-    int button1 = digitalRead(button1_pin);                  // Кнопка
-    //Serial.println(String("button1=") + button1);          // Выводим текущее мгновенное состояние кнопки
+    int button1 = !digitalRead(button1_pin);               // Кнопка
+    //Serial.println(String("button1=") + button1);        // Выводим текущее мгновенное состояние кнопки
 
-    if (button1_prev == 0 && button1 == 1)                   // Произошло нажатие
+    int pir = digitalRead(pir_sensor_pin);
+    //Serial.println(String("pir=") + pir);                  // Выводим текущее мгновенное состояние датчика
+
+    if (button1_prev == 0 && button1 == 1)                 // Произошло нажатие
     {
+      Serial.println(String("button1=") + button1);
       esp_rpi.button1 = 1;
+      cnt_display_off = time_to_show_display;
+      u8g2.setPowerSave(0);                                // Включаем дисплей
     }
     button1_prev = button1;
+
+    if (pir == 1) 
+    {
+      cnt_display_off = time_to_show_display;
+      u8g2.setPowerSave(0);                                // Включаем дисплей
+    }
+
   }
 
   if (cntTimerTick % 100 == 0)           // 1 cек
@@ -258,6 +274,10 @@ void on_main_timer(void *arg)
       //Serial.println(String("WiFi RSSI: ") + rssi);
   
       esp_rpi.button1 = 0; // Обнуляем кнопку после отправки, чтобы поймать следующее нажатие
+
+      // Контроль подсветки дисплея
+      cnt_display_off--;
+      if (cnt_display_off == 0) u8g2.setPowerSave(1);        // Выключаем дисплей
   }
 
   if (cntTimerTick % 300 == 0)             // 3 сек
@@ -341,12 +361,13 @@ void setup() {
   
   pinMode(led_connect_rpi_pin, OUTPUT);
   pinMode(button1_pin, INPUT_PULLUP);     // Кнопка 1 
+  pinMode(pir_sensor_pin, INPUT);
 
   delay(2000);
 
   // Инициализация таймера на периодичность 0.1 с
   hw_timer = timerBegin(1000000);                       // Делитель таймера, работает с частотой 1 МГц (1/1000000 c)
-  timerAttachInterrupt(hw_timer, &on_hw_timer);       // Привязываем таймер к функции-прерыванию
+  timerAttachInterrupt(hw_timer, &on_hw_timer);         // Привязываем таймер к функции-прерыванию
   timerAlarm(hw_timer, 10000, true, 0);                 // Срабатывать прерыванию при достижении 10000 отсчетов (0.01сек), true - таймер сбросится для периодичности, 0 - неограниченное кол-во раз
 
   esp_timer_create_args_t timer_config =
@@ -354,7 +375,7 @@ void setup() {
     .callback = &on_main_timer,
     .name = "100Hz Timer"
   };
-  esp_timer_create(&timer_config, &timer);  // А запустим его после установки соединения из функции connect_to_router()
+  esp_timer_create(&timer_config, &timer);              // А запустим его после установки соединения из функции connect_to_router()
 
   connect_to_router();
 
@@ -448,13 +469,19 @@ void loop()
      delay(200);
   }
 
-// ********************* SSD1309 ************************************
+  // ********************* SSD1309 ************************************
   
-if (SSD1309)
+  if (SSD1309)
   {
     float t1 = rpi_esp.t1/100.0;
     float t2 = 0;
-    
+
+    // Добавочные коэффициенты для перемещения статических надписей
+    static double addX = 0.0;
+    static double addY = 0.0;
+    static double offsetX = 0.05;
+    static double offsetY = 0.01;
+
     u8g2.clearBuffer();					// clear the internal memory
     //u8g2.setFontMode(1);
 
@@ -471,7 +498,7 @@ if (SSD1309)
       else
       {
         u8g2.setFont(u8g2_font_9x15_t_cyrillic);	// choose a suitable font
-        u8g2.setCursor(15,15);
+        u8g2.setCursor(15+addX, 15+addY);
         u8g2.print("За балконом");
 
         u8g2.setFont(u8g2_font_logisoso30_tf);
@@ -496,6 +523,21 @@ if (SSD1309)
     }
 
     u8g2.sendBuffer();					// transfer internal memory to the display
+
+    // Движение статических надписей
+    addX = addX + offsetX;
+    addY = addY + offsetY;
+    if (addX < -4 || addX > 4) 
+    { 
+      offsetX = offsetX * -1;
+      addX = addX + offsetX;
+    }
+    if (addY <= -1 || addY >= 1) 
+    {
+      offsetY = offsetY * -1;
+      addY = addY + offsetY;
+    }
+
     delay(500);  
   }
 
